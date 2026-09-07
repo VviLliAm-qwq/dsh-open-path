@@ -45,7 +45,7 @@ describe('runOpenCommand', () => {
         try {
             const result = await runOpenCommand(
                 '',
-                { cwd: ws.root, dialogs: h.dialog, spawn: async (spec) => { h.spawns.push(spec); return true; } },
+                { cwd: ws.root, platform: 'win32', dialogs: h.dialog, spawn: async (spec) => { h.spawns.push(spec); return true; } },
                 DEFAULT_OPTIONS,
             );
             expect(result.kind).toBe('success');
@@ -64,7 +64,7 @@ describe('runOpenCommand', () => {
         try {
             const result = await runOpenCommand(
                 'src/index.ts',
-                { cwd: ws.root, dialogs: h.dialog, spawn: async (spec) => { h.spawns.push(spec); return true; } },
+                { cwd: ws.root, platform: 'win32', dialogs: h.dialog, spawn: async (spec) => { h.spawns.push(spec); return true; } },
                 DEFAULT_OPTIONS,
             );
             expect(result.kind).toBe('success');
@@ -83,7 +83,7 @@ describe('runOpenCommand', () => {
         try {
             const result = await runOpenCommand(
                 ws.root,
-                { cwd: ws.root, dialogs: h.dialog, spawn: async (spec) => { h.spawns.push(spec); return true; } },
+                { cwd: ws.root, platform: 'win32', dialogs: h.dialog, spawn: async (spec) => { h.spawns.push(spec); return true; } },
                 DEFAULT_OPTIONS,
             );
             expect(result.kind).toBe('success');
@@ -99,7 +99,7 @@ describe('runOpenCommand', () => {
         try {
             const result = await runOpenCommand(
                 '完全不存在的名字xyz',
-                { cwd: ws.root, spawn: async () => true },
+                { cwd: ws.root, platform: 'win32', spawn: async () => true },
                 DEFAULT_OPTIONS,
             );
             expect(result.kind).toBe('error');
@@ -116,7 +116,7 @@ describe('runOpenCommand', () => {
         try {
             const result = await runOpenCommand(
                 'readme', // matches docs/readme.md only
-                { cwd: ws.root, dialogs: h.dialog, spawn: async (spec) => { h.spawns.push(spec); return true; } },
+                { cwd: ws.root, platform: 'win32', dialogs: h.dialog, spawn: async (spec) => { h.spawns.push(spec); return true; } },
                 DEFAULT_OPTIONS,
             );
             expect(result.kind).toBe('success');
@@ -135,7 +135,7 @@ describe('runOpenCommand', () => {
         try {
             const result = await runOpenCommand(
                 'test',
-                { cwd: ws.root, dialogs: h.dialog, spawn: async (spec) => { h.spawns.push(spec); return true; } },
+                { cwd: ws.root, platform: 'win32', dialogs: h.dialog, spawn: async (spec) => { h.spawns.push(spec); return true; } },
                 DEFAULT_OPTIONS,
             );
             expect(result.kind).toBe('success');
@@ -156,7 +156,7 @@ describe('runOpenCommand', () => {
         try {
             const result = await runOpenCommand(
                 'test',
-                { cwd: ws.root, dialogs: h.dialog, spawn: async () => true },
+                { cwd: ws.root, platform: 'win32', dialogs: h.dialog, spawn: async () => true },
                 DEFAULT_OPTIONS,
             );
             expect(result).toEqual({ kind: 'success' });
@@ -171,7 +171,7 @@ describe('runOpenCommand', () => {
         try {
             const result = await runOpenCommand(
                 'test',
-                { cwd: ws.root, spawn: async () => true },
+                { cwd: ws.root, platform: 'win32', spawn: async () => true },
                 DEFAULT_OPTIONS,
             );
             expect(result.kind).toBe('error');
@@ -205,7 +205,7 @@ describe('runOpenCommand', () => {
         try {
             const result = await runOpenCommand(
                 'src/readme.md', // does not exist — fuzzy matches docs/readme.md alone
-                { cwd: ws.root, dialogs: h.dialog, spawn: async (spec) => { h.spawns.push(spec); return true; } },
+                { cwd: ws.root, platform: 'win32', dialogs: h.dialog, spawn: async (spec) => { h.spawns.push(spec); return true; } },
                 DEFAULT_OPTIONS,
             );
             expect(result.kind).toBe('success');
@@ -223,7 +223,7 @@ describe('runOpenCommand', () => {
         try {
             const result = await runOpenCommand(
                 '',
-                { cwd: ws.root, spawn: async () => false },
+                { cwd: ws.root, platform: 'win32', spawn: async () => false },
                 DEFAULT_OPTIONS,
             );
             expect(result.kind).toBe('error');
@@ -240,7 +240,7 @@ describe('runOpenCommand', () => {
         try {
             const result = await runOpenCommand(
                 'test',
-                { cwd: ws.root, dialogs: h.dialog, spawn: async (spec) => { h.spawns.push(spec); return true; } },
+                { cwd: ws.root, platform: 'win32', dialogs: h.dialog, spawn: async (spec) => { h.spawns.push(spec); return true; } },
                 { maxCandidates: 1, includeHidden: false },
             );
             expect(result.kind).toBe('success');
@@ -287,7 +287,7 @@ describe('runOpenCommand / URL support', () => {
         try {
             const result = await runOpenCommand(
                 'HTTP://EXAMPLE.COM',
-                { cwd: ws.root, spawn: async (spec) => { spawns.push(spec); return true; } },
+                { cwd: ws.root, platform: 'win32', spawn: async (spec) => { spawns.push(spec); return true; } },
                 DEFAULT_OPTIONS,
             );
             expect(result.kind).toBe('success');
@@ -304,7 +304,7 @@ describe('runOpenCommand / URL support', () => {
         for (const bad of ['javascript:alert(1)', 'ftp://example.com', 'file:///C:/Windows/temp.txt', 'mailto:a@b.c']) {
             const result = await runOpenCommand(
                 bad,
-                { cwd: ws.root, spawn: async (spec) => { spawns.push(spec); return true; } },
+                { cwd: ws.root, platform: 'win32', spawn: async (spec) => { spawns.push(spec); return true; } },
                 DEFAULT_OPTIONS,
             );
             expect(result.kind).toBe('error');
@@ -347,7 +347,7 @@ describe('runOpenCommand / bare URL support', () => {
         try {
             const result = await runOpenCommand(
                 'github.com',
-                { cwd: ws.root, spawn: async (spec) => { spawns.push(spec); return true; }, scan: scanSpy },
+                { cwd: ws.root, platform: 'win32', spawn: async (spec) => { spawns.push(spec); return true; }, scan: scanSpy },
                 DEFAULT_OPTIONS,
             );
             expect(result.kind).toBe('success');
@@ -366,7 +366,7 @@ describe('runOpenCommand / bare URL support', () => {
         try {
             const result = await runOpenCommand(
                 'localhost:5173',
-                { cwd: ws.root, spawn: async (spec) => { spawns.push(spec); return true; } },
+                { cwd: ws.root, platform: 'win32', spawn: async (spec) => { spawns.push(spec); return true; } },
                 DEFAULT_OPTIONS,
             );
             expect(result.kind).toBe('success');
@@ -384,7 +384,7 @@ describe('runOpenCommand / bare URL support', () => {
         try {
             const result = await runOpenCommand(
                 'github.com',
-                { cwd: ws.root, spawn: async (spec) => { spawns.push(spec); return true; } },
+                { cwd: ws.root, platform: 'win32', spawn: async (spec) => { spawns.push(spec); return true; } },
                 DEFAULT_OPTIONS,
             );
             expect(result.kind).toBe('success');
@@ -402,7 +402,7 @@ describe('runOpenCommand / bare URL support', () => {
         try {
             const result = await runOpenCommand(
                 'readme.md',
-                { cwd: ws.root, spawn: async (spec) => { spawns.push(spec); return true; } },
+                { cwd: ws.root, platform: 'win32', spawn: async (spec) => { spawns.push(spec); return true; } },
                 DEFAULT_OPTIONS,
             );
             expect(result.kind).toBe('success');
