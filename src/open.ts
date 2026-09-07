@@ -5,12 +5,17 @@
  * drive the exact same code path the plugin uses):
  *
  *   raw input empty            → open the session working directory
+ *   http(s):// URL             → open with the platform default handler
  *   absolute / relative path   → stat; exists → open; missing → fuzzy search
  *   anything else              → fuzzy search of the workspace index
  *      0 hits                  → { kind: 'error', text: 'no match' }
  *      1 hit                   → open it directly
  *      >1 hits, dialogs ready  → managed select dialog → open pick
  *      >1 hits, no dialogs     → error listing the top few candidates
+ *
+ * Only http/https URLs are accepted; other schemes (file:, javascript:,
+ * ftp:, …) are rejected before reaching the OS handler (urlGuard-style
+ * trust boundary, mirroring the TUI's own openExternal classification).
  *
  * @module dsh-open-path/open
  */
@@ -87,7 +92,11 @@ function defaultSpawn(spec: SpawnSpec): Promise<boolean> {
     });
 }
 
-/** Open one resolved target; every failure becomes an error result. */
+/**
+ * Open one resolved target; every failure becomes an error result.
+ * `isDir: false` also covers http/https URLs — the non-directory channels
+ * (Windows `start`, macOS `open`, Linux `xdg-open`) take URLs unchanged.
+ */
 async function openTarget(runtime: OpenRuntime, absPath: string, isDir: boolean): Promise<CommandResultLike> {
     if (!hasGraphicalSession(runtime.platform)) {
         return { kind: 'error', text: '当前环境没有图形会话，无法打开文件管理器' };
@@ -104,6 +113,13 @@ function labelFor(entry: ScannedEntry): string {
     return entry.isDir ? `📁 ${entry.basename}` : entry.basename;
 }
 
+/** http/https URL detection (case-insensitive; the only allowed schemes). */
+const HTTP_URL = /^https?:\/\//iu;
+
+export function isHttpUrl(value: string): boolean {
+    return HTTP_URL.test(value);
+}
+
 /** Run the full /open decision tree and settle with a command result. */
 export async function runOpenCommand(
     rawInput: string,
@@ -117,7 +133,27 @@ export async function runOpenCommand(
         return openTarget(runtime, runtime.cwd, true);
     }
 
-    // 2) Path-shaped input: absolute, ./, ../, or containing a separator.
+    // 2) http/https URL → open with the platform default handler (browser).
+    //    Deliberately BEFORE path detection: an https://… input is also
+    //    path-shaped and would otherwise fall into a stat/fuzzy detour.
+    //    Only http(s) is allowed — any other scheme (file:, javascript:,
+    //    ftp:, …) is rejected instead of handed to the OS iframe of trust.
+    if (isHttpUrl(query)) {
+        return openTarget(runtime, query, false);
+    }
+    // 2b) Other scheme-like input (mailto:, ftp:, javascript:, ws:, …) is
+    //     rejected with a clear error — never silently routed into the path
+    //     or fuzzy branches. A bare drive letter ("C:\…") needs ≥2 scheme
+    //     characters to match, so Windows paths stay untouched.
+    const schemeMatch = /^([a-z][a-z0-9+.-]{1,}):/iu.exec(query);
+    if (schemeMatch !== null) {
+        return {
+            kind: 'error',
+            text: `仅支持 http/https 链接（检测到 ${schemeMatch[1].toLowerCase()}: 协议）`,
+        };
+    }
+
+    // 3) Path-shaped input: absolute, ./, ../, or containing a separator.
     const pathShaped = isAbsolute(query) || query.startsWith('.') || /[\\/]/.test(query);
     if (pathShaped) {
         const target = isAbsolute(query) ? query : resolve(runtime.cwd, query);
@@ -132,7 +168,7 @@ export async function runOpenCommand(
         }
     }
 
-    // 3) Fuzzy search of the workspace index. For a missing path-shaped
+    // 4) Fuzzy search of the workspace index. For a missing path-shaped
     //    query, search by the LAST segment (what the user actually named),
     //    so "src/readme.md" with a typo'd directory still finds readme.md.
     const segments = query.split(/[\\/]/).filter((segment) => segment !== '');
@@ -151,7 +187,7 @@ export async function runOpenCommand(
         return openTarget(runtime, only.absPath, only.isDir);
     }
 
-    // 4) Multiple candidates: ask, open the pick, or degrade.
+    // 5) Multiple candidates: ask, open the pick, or degrade.
     const dialog = runtime.dialogs;
     if (dialog === undefined) {
         const preview = ranked

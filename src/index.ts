@@ -1,12 +1,17 @@
 /**
  * dsh-open-path — a `/open` slash command for dsh-TUI.
  *
- * Opens files and folders with the platform default handler:
+ * Opens files, folders and http(s) URLs with the platform default handler:
  *  - `/open`                  → opens the session working directory
  *  - `/open <path>`           → absolute / relative path (must exist)
+ *  - `/open <http(s)-url>`    → opens with the default browser/handler
  *  - `/open <fragment>`       → fuzzy search of the workspace; one match opens
  *                               directly, several matches show a managed
  *                               select dialog (TUI seam 十), none = clear error
+ *
+ * URL trust boundary: only http/https is handed to the OS handler; other
+ * schemes (file:, javascript:, ftp:, …) are rejected with a clear error
+ * (mirrors the TUI's own openExternal classification).
  *
  * Compatibility contract:
  *  - Manifest: Community v0.15 (`dsh-plugin.json`, commands.dsh/v1alpha1#Command
@@ -93,8 +98,8 @@ export function apply(ctx: Context, config: Config = {}): void {
 
     const definition: CommandDefinitionLike = {
         name: 'open',
-        description: 'Open a path or fuzzy-find a workspace file/folder (blank = working directory)',
-        input: { hint: '<路径或文件名>（留空 = 打开工作目录）' },
+        description: 'Open a path, http(s) URL, or fuzzy-find a workspace file/folder (blank = working directory)',
+        input: { hint: '<路径 / 文件名 / http(s) 链接>（留空 = 打开工作目录）' },
         handler: async (invocation) => {
             const cwd = invocation.agent?.session?.meta?.cwd ?? process.cwd();
             const dialogs = ctx.get('tuiDialogs', false) as OpenDialogLike | undefined;

@@ -252,3 +252,65 @@ describe('runOpenCommand', () => {
         }
     });
 });
+
+describe('runOpenCommand / URL support', () => {
+    it('opens an http URL with the default handler, skipping the workspace scan', async () => {
+        const ws = makeWorkspace();
+        const spawns: SpawnSpec[] = [];
+        const scanSpy = vi.fn(async () => []);
+        try {
+            const result = await runOpenCommand(
+                'https://example.com/docs?page=1',
+                {
+                    cwd: ws.root,
+                    spawn: async (spec) => { spawns.push(spec); return true; },
+                    scan: scanSpy,
+                },
+                DEFAULT_OPTIONS,
+            );
+            expect(result.kind).toBe('success');
+            expect(result.text ?? '').toContain('https://example.com/docs?page=1');
+            expect(scanSpy).not.toHaveBeenCalled();
+            expect(spawns).toHaveLength(1);
+            expect(spawns[0].args.join(' ')).toContain('https://example.com/docs?page=1');
+            // URL goes through the non-directory channel (Windows: start)
+            expect(spawns[0].file).toBe(process.env.ComSpec || 'cmd.exe');
+        }
+        finally {
+            ws.cleanup();
+        }
+    });
+
+    it('detects http URLs case-insensitively', async () => {
+        const ws = makeWorkspace();
+        const spawns: SpawnSpec[] = [];
+        try {
+            const result = await runOpenCommand(
+                'HTTP://EXAMPLE.COM',
+                { cwd: ws.root, spawn: async (spec) => { spawns.push(spec); return true; } },
+                DEFAULT_OPTIONS,
+            );
+            expect(result.kind).toBe('success');
+            expect(spawns[0].args.join(' ')).toContain('HTTP://EXAMPLE.COM');
+        }
+        finally {
+            ws.cleanup();
+        }
+    });
+
+    it('rejects non-http(s) schemes instead of handing them to the OS', async () => {
+        const ws = makeWorkspace();
+        const spawns: SpawnSpec[] = [];
+        for (const bad of ['javascript:alert(1)', 'ftp://example.com', 'file:///C:/Windows/temp.txt', 'mailto:a@b.c']) {
+            const result = await runOpenCommand(
+                bad,
+                { cwd: ws.root, spawn: async (spec) => { spawns.push(spec); return true; } },
+                DEFAULT_OPTIONS,
+            );
+            expect(result.kind).toBe('error');
+            expect(result.text ?? '').toContain('http');
+        }
+        expect(spawns).toHaveLength(0); // nothing reached the OS
+        ws.cleanup();
+    });
+});
