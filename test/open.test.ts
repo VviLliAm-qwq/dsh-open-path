@@ -263,6 +263,7 @@ describe('runOpenCommand / URL support', () => {
                 'https://example.com/docs?page=1',
                 {
                     cwd: ws.root,
+                    platform: 'win32',
                     spawn: async (spec) => { spawns.push(spec); return true; },
                     scan: scanSpy,
                 },
