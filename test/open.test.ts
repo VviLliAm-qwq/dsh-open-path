@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runOpenCommand, type OpenDialogLike } from '../src/open.js';
+import { guessBareUrl, runOpenCommand, type OpenDialogLike } from '../src/open.js';
 import type { SpawnSpec } from '../src/win32.js';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -312,5 +312,105 @@ describe('runOpenCommand / URL support', () => {
         }
         expect(spawns).toHaveLength(0); // nothing reached the OS
         ws.cleanup();
+    });
+});
+
+describe('guessBareUrl', () => {
+    it('prepends https:// to a bare domain', () => {
+        expect(guessBareUrl('github.com')).toBe('https://github.com');
+        expect(guessBareUrl('www.example.com/path/page?q=1')).toBe('https://www.example.com/path/page?q=1');
+        expect(guessBareUrl('sub.domain.co.uk:8443')).toBe('https://sub.domain.co.uk:8443');
+        expect(guessBareUrl('WWW.GitHub.COM')).toBe('https://WWW.GitHub.COM');
+    });
+
+    it('prepends http:// to localhost and IPv4 literals', () => {
+        expect(guessBareUrl('localhost:5173')).toBe('http://localhost:5173');
+        expect(guessBareUrl('127.0.0.1:8080/api')).toBe('http://127.0.0.1:8080/api');
+        expect(guessBareUrl('192.168.1.5')).toBe('http://192.168.1.5');
+    });
+
+    it('leaves file names and version-like tokens alone', () => {
+        expect(guessBareUrl('readme.md')).toBeNull();
+        expect(guessBareUrl('index.ts')).toBeNull();
+        expect(guessBareUrl('v2.0.1')).toBeNull();
+        expect(guessBareUrl('2024.12.31')).toBeNull(); // year segments > 255 → not an IP
+        expect(guessBareUrl('a.b')).toBeNull(); // 1-char TLD
+        expect(guessBareUrl('src/index.ts')).toBeNull(); // path-shaped
+    });
+});
+
+describe('runOpenCommand / bare URL support', () => {
+    it('opens a protocol-less domain with https://, skipping the scan', async () => {
+        const ws = makeWorkspace();
+        const spawns: SpawnSpec[] = [];
+        const scanSpy = vi.fn(async () => []);
+        try {
+            const result = await runOpenCommand(
+                'github.com',
+                { cwd: ws.root, spawn: async (spec) => { spawns.push(spec); return true; }, scan: scanSpy },
+                DEFAULT_OPTIONS,
+            );
+            expect(result.kind).toBe('success');
+            expect(result.text ?? '').toContain('https://github.com');
+            expect(scanSpy).not.toHaveBeenCalled();
+            expect(spawns[0].args.join(' ')).toContain('https://github.com');
+        }
+        finally {
+            ws.cleanup();
+        }
+    });
+
+    it('opens localhost with http://', async () => {
+        const ws = makeWorkspace();
+        const spawns: SpawnSpec[] = [];
+        try {
+            const result = await runOpenCommand(
+                'localhost:5173',
+                { cwd: ws.root, spawn: async (spec) => { spawns.push(spec); return true; } },
+                DEFAULT_OPTIONS,
+            );
+            expect(result.kind).toBe('success');
+            expect(spawns[0].args.join(' ')).toContain('http://localhost:5173');
+        }
+        finally {
+            ws.cleanup();
+        }
+    });
+
+    it('prefers a real workspace file over the same-named URL guess', async () => {
+        const ws = makeWorkspace();
+        writeFileSync(join(ws.root, 'github.com'), 'hosts file');
+        const spawns: SpawnSpec[] = [];
+        try {
+            const result = await runOpenCommand(
+                'github.com',
+                { cwd: ws.root, spawn: async (spec) => { spawns.push(spec); return true; } },
+                DEFAULT_OPTIONS,
+            );
+            expect(result.kind).toBe('success');
+            expect(spawns[0].args.join(' ')).toContain('github.com');
+            expect(spawns[0].args.join(' ')).not.toContain('https://');
+        }
+        finally {
+            ws.cleanup();
+        }
+    });
+
+    it('keeps opening file names with common extensions (readme.md → workspace file)', async () => {
+        const ws = makeWorkspace();
+        const spawns: SpawnSpec[] = [];
+        try {
+            const result = await runOpenCommand(
+                'readme.md',
+                { cwd: ws.root, spawn: async (spec) => { spawns.push(spec); return true; } },
+                DEFAULT_OPTIONS,
+            );
+            expect(result.kind).toBe('success');
+            expect(spawns[0].args.join(' ')).toContain('readme.md');
+            expect(spawns[0].args.join(' ')).not.toContain('https://');
+        }
+        finally {
+            ws.cleanup();
+        }
     });
 });

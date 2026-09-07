@@ -120,6 +120,60 @@ export function isHttpUrl(value: string): boolean {
     return HTTP_URL.test(value);
 }
 
+/**
+ * File-name tails that must NEVER be treated as a bare (protocol-less) URL.
+ * `/open readme.md` means the workspace file, not a .md domain.
+ */
+const FILE_TAILS = new Set([
+    'md', 'markdown', 'txt', 'text', 'rst', 'log', 'csv', 'tsv',
+    'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'json', 'jsonc', 'jsonl',
+    'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'env', 'lock', 'properties',
+    'css', 'scss', 'less', 'sass', 'html', 'htm', 'vue', 'svelte', 'astro',
+    'py', 'pyc', 'rb', 'go', 'rs', 'zig', 'c', 'h', 'cpp', 'hpp', 'cc', 'cs',
+    'java', 'kt', 'kts', 'swift', 'scala', 'sh', 'bash', 'zsh', 'bat', 'cmd',
+    'ps1', 'psm1', 'fish', 'npmrc', 'nix', 'dockerfile',
+    'exe', 'dll', 'msi', 'app', 'dmg', 'apk', 'deb', 'rpm',
+    'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'zst', 'iso', 'bin',
+    'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods',
+    'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'tif', 'tiff',
+    'avif', 'heic', 'psd', 'ai', 'eps', 'raw', 'exr',
+    'wav', 'mp3', 'mp4', 'm4a', 'ogg', 'flac', 'aac', 'wma', 'mkv', 'avi',
+    'mov', 'webm', 'flv', 'm4v', '3gp',
+    'sql', 'db', 'sqlite', 'dump', 'bak', 'wasm', 'map', 'd.ts',
+    'gitignore', 'gitattributes', 'editorconfig', 'prettierrc', 'eslintrc',
+    'patch', 'diff', 'desktop',
+]);
+
+/** Is this an IPv4 literal (optionally with port and path)? */
+function isIpv4Literal(value: string): boolean {
+    const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?::\d+)?(?:\/.*)?$/u.exec(value);
+    if (match === null) return false;
+    return match.slice(1, 5).every((segment) => Number(segment) <= 255);
+}
+
+/**
+ * Guess a protocol-less URL the user clearly meant as a web address:
+ *  - `github.com`, `www.example.com/path` → https://…  (domain TLD)
+ *  - `localhost:5173`, `127.0.0.1:8080`  → http://…   (local dev)
+ *
+ * Returns null when the input does not look like a web address, so paths and
+ * file names (incl. almost every common file extension) keep flowing into the
+ * stat / fuzzy branches untouched.
+ */
+export function guessBareUrl(value: string): string | null {
+    if (/^localhost(?::\d+)?(?:\/.*)?$/iu.test(value) || isIpv4Literal(value)) {
+        return `http://${value}`;
+    }
+    // host(.tld)+ with optional :port and /path — letters/digits/hyphens only.
+    const match = /^([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?::\d+)?(?:\/.*)?$/iu.exec(value);
+    if (match === null) return null;
+    const host = match[1].toLowerCase();
+    const tld = host.slice(host.lastIndexOf('.') + 1);
+    if (tld.length < 2 || !/^[a-z]+$/u.test(tld)) return null;
+    if (FILE_TAILS.has(tld)) return null;
+    return `https://${value}`;
+}
+
 /** Run the full /open decision tree and settle with a command result. */
 export async function runOpenCommand(
     rawInput: string,
@@ -141,7 +195,27 @@ export async function runOpenCommand(
     if (isHttpUrl(query)) {
         return openTarget(runtime, query, false);
     }
-    // 2b) Other scheme-like input (mailto:, ftp:, javascript:, ws:, …) is
+    // 2b) Protocol-less web address: `github.com`, `example.com/path`,
+    //     `localhost:5173`, `127.0.0.1:8080`… BEFORE the scheme check, so a
+    //     host:port form is never mistaken for a protocol. A workspace file
+    //     with the same name always wins (a real file on disk beats a guessed
+    //     URL). File extensions are excluded from guessing, so `readme.md`
+    //     still opens the file / fuzzy-matches as today.
+    const guessedUrl = guessBareUrl(query);
+    if (guessedUrl !== null) {
+        try {
+            const localTarget = resolve(runtime.cwd, query);
+            if (existsSync(localTarget)) {
+                return openTarget(runtime, localTarget, statSync(localTarget).isDirectory());
+            }
+        }
+        catch {
+            // stat race — fall through to the URL guess below.
+        }
+        return openTarget(runtime, guessedUrl, false);
+    }
+
+    // 2c) Other scheme-like input (mailto:, ftp:, javascript:, ws:, …) is
     //     rejected with a clear error — never silently routed into the path
     //     or fuzzy branches. A bare drive letter ("C:\…") needs ≥2 scheme
     //     characters to match, so Windows paths stay untouched.

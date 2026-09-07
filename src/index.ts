@@ -5,13 +5,17 @@
  *  - `/open`                  → opens the session working directory
  *  - `/open <path>`           → absolute / relative path (must exist)
  *  - `/open <http(s)-url>`    → opens with the default browser/handler
+ *  - `/open github.com`       → protocol-less domain: https:// is prepended
+ *                               (localhost/IPv4 get http://); a same-named
+ *                               workspace file always wins the guess
  *  - `/open <fragment>`       → fuzzy search of the workspace; one match opens
  *                               directly, several matches show a managed
  *                               select dialog (TUI seam 十), none = clear error
  *
  * URL trust boundary: only http/https is handed to the OS handler; other
  * schemes (file:, javascript:, ftp:, …) are rejected with a clear error
- * (mirrors the TUI's own openExternal classification).
+ * (mirrors the TUI's own openExternal classification). Bare-domain guessing
+ * excludes common file extensions, so `readme.md` still means the file.
  *
  * Compatibility contract:
  *  - Manifest: Community v0.15 (`dsh-plugin.json`, commands.dsh/v1alpha1#Command
@@ -98,8 +102,8 @@ export function apply(ctx: Context, config: Config = {}): void {
 
     const definition: CommandDefinitionLike = {
         name: 'open',
-        description: 'Open a path, http(s) URL, or fuzzy-find a workspace file/folder (blank = working directory)',
-        input: { hint: '<路径 / 文件名 / http(s) 链接>（留空 = 打开工作目录）' },
+        description: 'Open a path, http(s) URL or bare domain (github.com), or fuzzy-find a workspace file/folder (blank = working directory)',
+        input: { hint: '<路径 / 文件名 / 链接或域名>（留空 = 打开工作目录）' },
         handler: async (invocation) => {
             const cwd = invocation.agent?.session?.meta?.cwd ?? process.cwd();
             const dialogs = ctx.get('tuiDialogs', false) as OpenDialogLike | undefined;

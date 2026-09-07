@@ -3,7 +3,7 @@
   "manifestVersion": "0.15",
   "id": "com.dsh-tui-ecosystem.dsh-open-path",
   "name": "dsh-open-path",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "facets": {
     "host": {
       "entry": "lib/index.js",
@@ -30,7 +30,7 @@
       {
         "id": "com.dsh-tui-ecosystem.dsh-open-path.open",
         "title": "/open",
-        "description": "Open a path, http(s) URL, or fuzzy-find a workspace file/folder (blank = open the working directory)"
+        "description": "Open a path, http(s) URL or bare domain (github.com), or fuzzy-find a workspace file/folder (blank = open the working directory)"
       }
     ]
   },
