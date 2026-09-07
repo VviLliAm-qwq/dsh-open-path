@@ -1,0 +1,41 @@
+{
+  "$schema": "https://dsh.community/schemas/dsh-plugin-0.15.json",
+  "manifestVersion": "0.15",
+  "id": "com.dsh-tui-ecosystem.dsh-open-path",
+  "name": "dsh-open-path",
+  "version": "0.1.0",
+  "facets": {
+    "host": {
+      "entry": "lib/index.js",
+      "apiVersion": "v1alpha1"
+    }
+  },
+  "requires": {
+    "contracts": [
+      {
+        "apiVersion": "commands.dsh/v1alpha1",
+        "kind": "Command"
+      }
+    ]
+  },
+  "permissions": [
+    {
+      "name": "commands.invoke",
+      "scope": "com.dsh-tui-ecosystem.dsh-open-path.open",
+      "reason": "run the declared /open command"
+    }
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "com.dsh-tui-ecosystem.dsh-open-path.open",
+        "title": "/open",
+        "description": "Open a path or fuzzy-find a workspace file/folder (blank = open the working directory)"
+      }
+    ]
+  },
+  "license": "MIT",
+  "source": {
+    "repository": "https://github.com/VviLliAm-qwq/dsh-open-path"
+  }
+}

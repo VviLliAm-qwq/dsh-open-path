@@ -1,0 +1,57 @@
+{
+  "name": "dsh-open-path",
+  "version": "0.1.0",
+  "description": "dsh-TUI /open: open files and folders by path or fuzzy workspace search; a bare /open opens the session working directory in the file manager.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "dsh-plugin.json",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": "^22.19 || >=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "validate:manifest": "node scripts/validate-manifest.mjs",
+    "pack:verify": "node scripts/pack-verify.mjs",
+    "prepublishOnly": "pnpm build && pnpm test && pnpm validate:manifest && pnpm pack:verify"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VviLliAm-qwq/dsh-open-path.git"
+  },
+  "homepage": "https://github.com/VviLliAm-qwq/dsh-open-path#readme",
+  "bugs": {
+    "url": "https://github.com/VviLliAm-qwq/dsh-open-path/issues"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@types/node": "^22.0.0",
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.4"
+  }
+}

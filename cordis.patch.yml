@@ -1,0 +1,4 @@
+# dsh-open-path bundle patch: mounts the /open command plugin.
+- insert:
+    - id: dsh-open-path
+      name: 'dsh-open-path'
