@@ -50,7 +50,7 @@ cd ~/.dsh/profiles/dsh-tui && pnpm add <本仓库路径>
 
 ## 工作目录语义
 
-命令以**接收会话的工作目录**（`agent.session.meta.cwd`）为基准，而非进程 cwd——在 TUI 里 `/workspace` 切换目录后 `/open` 依然跟手；极端情况下（无会话 cwd 信息）回退到进程启动目录。
+命令以**接收会话的工作目录**（`agent.session.header.cwd`，DSH 会话头记录的 host-side cwd）为基准，而非进程 cwd——TUI 里 `/workspace` 切换会新建会话，新会话头即新目录，所以 `/open` 始终跟手；极端情况下按 `session.meta.cwd`（旧版宿主别名）→ 进程启动目录依次回退。
 
 ## Model Experience
 

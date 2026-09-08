@@ -66,12 +66,28 @@ export interface CommandDefinitionLike {
     readonly handler: (invocation: CommandInvocationLike) => CommandResultLike | Promise<CommandResultLike>;
 }
 
+/**
+ * Structural subset of `@deepseek-ai/dsh-session` `SessionHeader` — the live
+ * session's storage metadata. `meta` is only a construction-time input
+ * (`CreateSessionOptions.meta`); the runtime `Session` exposes the folded
+ * result as `header`, so `session.meta` is always undefined at invocation time.
+ */
+export interface SessionHeaderLike {
+    /** Absolute working directory the session was created in, when known. */
+    readonly cwd?: string;
+}
+
 /** Structural subset of `CommandInvocation`. */
 export interface CommandInvocationLike {
     readonly rawInput: string;
     readonly signal: AbortSignal;
     readonly agent?: {
-        readonly session?: { readonly meta?: { readonly cwd?: string } };
+        readonly session?: {
+            /** Live session storage metadata — the authoritative per-session cwd. */
+            readonly header?: SessionHeaderLike;
+            /** Legacy host alias for the same metadata (older dsh lines). */
+            readonly meta?: SessionHeaderLike;
+        };
     };
 }
 
@@ -83,6 +99,18 @@ export interface PluginHostLike {
 /** Structural subset of the direct `commands` service (C-070 boundary). */
 export interface CommandsLike {
     register(definition: CommandDefinitionLike): () => void;
+}
+
+/**
+ * Resolve the working directory `/open` operates on: the invoking session's
+ * live cwd, read from the session header. A TUI `/workspace` switch starts a
+ * NEW session whose header carries the new cwd, so this always follows the
+ * current workspace. `process.cwd()` — the host process's launch directory,
+ * which never changes for the life of the process — is only a last resort for
+ * invocations that carry no session metadata at all.
+ */
+export function resolveSessionCwd(agent: CommandInvocationLike['agent']): string {
+    return agent?.session?.header?.cwd ?? agent?.session?.meta?.cwd ?? process.cwd();
 }
 
 function effectiveOptions(config: Config): OpenCommandOptions {
@@ -105,7 +133,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         description: 'Open a path, http(s) URL or bare domain (github.com), or fuzzy-find a workspace file/folder (blank = working directory)',
         input: { hint: '<路径 / 文件名 / 链接或域名>（留空 = 打开工作目录）' },
         handler: async (invocation) => {
-            const cwd = invocation.agent?.session?.meta?.cwd ?? process.cwd();
+            const cwd = resolveSessionCwd(invocation.agent);
             const dialogs = ctx.get('tuiDialogs', false) as OpenDialogLike | undefined;
             return runOpenCommand(
                 invocation.rawInput,
