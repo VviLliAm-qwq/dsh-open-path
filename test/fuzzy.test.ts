@@ -32,6 +32,21 @@ describe('scoreMatch', () => {
         expect(scoreMatch('INDEX', 'index.ts')?.kind).toBe('prefix');
     });
 
+    it('matches NFD-on-disk names against an NFC query (macOS APFS/HFS+)', () => {
+        const onDisk = 'cafe\u0301-notes.md'; // NFD, as the filesystem reports it
+        const typed = 'caf\u00e9'; // NFC, as a user types it
+        expect(scoreMatch(typed, onDisk)?.kind).toBe('prefix');
+        // …and the other way round: an NFD query still hits an NFC candidate.
+        expect(scoreMatch('cafe\u0301-notes', 'caf\u00e9-notes.md')?.kind).toBe('prefix');
+    });
+
+    it('matches decomposed Hangul against the composed form', () => {
+        const composed = '\ud55c\uad6d.md'; // 한국.md
+        const decomposed = '\u1112\u1161\u11ab\u1100\u116e\u11a8.md'; // jamo form
+        expect(scoreMatch(composed, decomposed)?.kind).toBe('prefix');
+        expect(scoreMatch(decomposed, composed)?.kind).toBe('prefix');
+    });
+
     it('returns null when the query is not present in order', () => {
         expect(scoreMatch('zzz', 'abc.txt')).toBeNull();
     });

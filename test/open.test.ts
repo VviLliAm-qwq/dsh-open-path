@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { guessBareUrl, runOpenCommand, type OpenDialogLike } from '../src/open.js';
+import { expandTilde, guessBareUrl, runOpenCommand, type OpenDialogLike } from '../src/open.js';
 import type { SpawnSpec } from '../src/win32.js';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 /** Build a real temp workspace with a small tree, cleaned up after the test. */
 function makeWorkspace(): { root: string; cleanup: () => void } {
@@ -186,9 +186,12 @@ describe('runOpenCommand', () => {
     it('errors clearly when the platform has no graphical session', async () => {
         const ws = makeWorkspace();
         try {
+            // The env is injected: asking the real process.env made this test
+            // pass on a headless CI box and fail on any Linux desktop or WSL
+            // machine that happens to run the suite with DISPLAY set.
             const result = await runOpenCommand(
                 '',
-                { cwd: ws.root, platform: 'linux' },
+                { cwd: ws.root, platform: 'linux', env: {}, release: '6.8.0-45-generic' },
                 DEFAULT_OPTIONS,
             );
             expect(result.kind).toBe('error');
@@ -197,6 +200,19 @@ describe('runOpenCommand', () => {
         finally {
             ws.cleanup();
         }
+    });
+
+    it('reports a vanished working directory instead of a fake success', async () => {
+        const ghost = join(tmpdir(), 'dsh-open-path-ghost-' + Date.now());
+        const spawns: SpawnSpec[] = [];
+        const result = await runOpenCommand(
+            '',
+            { cwd: ghost, platform: 'win32', spawn: async (spec) => { spawns.push(spec); return true; } },
+            DEFAULT_OPTIONS,
+        );
+        expect(result.kind).toBe('error');
+        expect(result.text ?? '').toContain('目标不存在');
+        expect(spawns).toHaveLength(0); // nothing was handed to the OS
     });
 
     it('falls back to fuzzy search when a path-shaped input does not exist', async () => {
@@ -409,6 +425,186 @@ describe('runOpenCommand / bare URL support', () => {
             expect(result.kind).toBe('success');
             expect(spawns[0].args.join(' ')).toContain('readme.md');
             expect(spawns[0].args.join(' ')).not.toContain('https://');
+        }
+        finally {
+            ws.cleanup();
+        }
+    });
+});
+
+describe('runOpenCommand / cross-platform launchers', () => {
+    it('uses `open` on macOS', async () => {
+        const ws = makeWorkspace();
+        const spawns: SpawnSpec[] = [];
+        try {
+            const result = await runOpenCommand(
+                '',
+                { cwd: ws.root, platform: 'darwin', env: {}, spawn: async (spec) => { spawns.push(spec); return true; } },
+                DEFAULT_OPTIONS,
+            );
+            expect(result.kind).toBe('success');
+            expect(spawns).toHaveLength(1);
+            expect(spawns[0].file).toBe('open');
+            expect(spawns[0].args).toEqual([ws.root]);
+        }
+        finally {
+            ws.cleanup();
+        }
+    });
+
+    it('falls through to the next launcher when the first one cannot spawn (Linux)', async () => {
+        const ws = makeWorkspace();
+        const spawns: SpawnSpec[] = [];
+        try {
+            const result = await runOpenCommand(
+                'src/index.ts',
+                {
+                    cwd: ws.root,
+                    platform: 'linux',
+                    env: { DISPLAY: ':0' },
+                    release: '6.8.0-45-generic',
+                    // xdg-open is not installed → ENOENT; gio takes over.
+                    spawn: async (spec) => { spawns.push(spec); return spawns.length > 1; },
+                },
+                DEFAULT_OPTIONS,
+            );
+            expect(result.kind).toBe('success');
+            expect(spawns.map((spec) => spec.file)).toEqual(['xdg-open', 'gio']);
+            expect(spawns[1].args).toEqual(['open', join(ws.root, 'src', 'index.ts')]);
+        }
+        finally {
+            ws.cleanup();
+        }
+    });
+
+    it('names every attempted launcher when the whole Linux chain fails', async () => {
+        const ws = makeWorkspace();
+        try {
+            const result = await runOpenCommand(
+                '',
+                {
+                    cwd: ws.root,
+                    platform: 'linux',
+                    env: { DISPLAY: ':0' },
+                    release: '6.8.0-45-generic',
+                    spawn: async () => false,
+                },
+                DEFAULT_OPTIONS,
+            );
+            expect(result.kind).toBe('error');
+            expect(result.text ?? '').toContain('无法打开');
+            expect(result.text ?? '').toContain('xdg-open');
+            expect(result.text ?? '').toContain('exo-open');
+            expect(result.text ?? '').toContain('xdg-utils');
+        }
+        finally {
+            ws.cleanup();
+        }
+    });
+
+    it('opens a URL through the Linux chain without any path probe', async () => {
+        const ws = makeWorkspace();
+        const spawns: SpawnSpec[] = [];
+        try {
+            const result = await runOpenCommand(
+                'https://example.com/docs',
+                {
+                    cwd: ws.root,
+                    platform: 'linux',
+                    env: { WAYLAND_DISPLAY: 'wayland-0' },
+                    release: '6.8.0-45-generic',
+                    spawn: async (spec) => { spawns.push(spec); return true; },
+                },
+                DEFAULT_OPTIONS,
+            );
+            expect(result.kind).toBe('success');
+            expect(spawns[0].args).toEqual(['https://example.com/docs']);
+        }
+        finally {
+            ws.cleanup();
+        }
+    });
+});
+
+describe('expandTilde', () => {
+    // Platform-native home so the expectations hold on Windows, macOS and Linux
+    // (the `/` a user types must come out as this platform's separator).
+    const HOME = join(tmpdir(), 'dsh-open-path-home');
+
+    it('expands a bare `~` and normalises the typed separator', () => {
+        expect(expandTilde('~', HOME)).toBe(HOME);
+        expect(expandTilde('~/docs', HOME)).toBe(join(HOME, 'docs'));
+        expect(expandTilde('~\\docs', HOME)).toBe(join(HOME, 'docs'));
+        expect(expandTilde('~/docs/deep', HOME)).toBe(join(HOME, 'docs', 'deep'));
+    });
+
+    it('leaves `~user` and other paths untouched', () => {
+        expect(expandTilde('~root/docs', HOME)).toBe('~root/docs');
+        expect(expandTilde('/tmp/~/x', HOME)).toBe('/tmp/~/x');
+        expect(expandTilde('docs', HOME)).toBe('docs');
+    });
+
+    it('keeps a root home directory single-separated', () => {
+        expect(expandTilde('~/docs', sep)).toBe(join(sep, 'docs'));
+    });
+});
+
+describe('runOpenCommand / ~ expansion', () => {
+    it('opens a `~/…` path against the home directory, not the workspace', async () => {
+        const ws = makeWorkspace();
+        const home = join(ws.root, 'home');
+        mkdirSync(join(home, 'docs'), { recursive: true });
+        const spawns: SpawnSpec[] = [];
+        try {
+            const result = await runOpenCommand(
+                '~/docs',
+                { cwd: ws.root, platform: 'win32', home, spawn: async (spec) => { spawns.push(spec); return true; } },
+                DEFAULT_OPTIONS,
+            );
+            expect(result.kind).toBe('success');
+            expect(spawns[0].file).toBe('powershell.exe'); // a directory
+            expect(spawns[0].args.join(' ')).toContain(join(home, 'docs'));
+        }
+        finally {
+            ws.cleanup();
+        }
+    });
+
+    it('opens the home directory itself for a bare `~`', async () => {
+        const ws = makeWorkspace();
+        const home = join(ws.root, 'home');
+        mkdirSync(home, { recursive: true });
+        const spawns: SpawnSpec[] = [];
+        try {
+            const result = await runOpenCommand(
+                '~',
+                { cwd: ws.root, platform: 'win32', home, spawn: async (spec) => { spawns.push(spec); return true; } },
+                DEFAULT_OPTIONS,
+            );
+            expect(result.kind).toBe('success');
+            expect(spawns[0].args.join(' ')).toContain(home);
+        }
+        finally {
+            ws.cleanup();
+        }
+    });
+
+    it('falls back to fuzzy search when the expanded home path does not exist', async () => {
+        const ws = makeWorkspace();
+        const spawns: SpawnSpec[] = [];
+        try {
+            const result = await runOpenCommand(
+                '~/readme', // no such file under home → fuzzy finds docs/readme.md
+                {
+                    cwd: ws.root,
+                    platform: 'win32',
+                    home: join(ws.root, 'home'),
+                    spawn: async (spec) => { spawns.push(spec); return true; },
+                },
+                DEFAULT_OPTIONS,
+            );
+            expect(result.kind).toBe('success');
+            expect(spawns[0].args.join(' ')).toContain('readme.md');
         }
         finally {
             ws.cleanup();

@@ -8,12 +8,19 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        # engines: ^22.19 || >=24
-        node: [22, 24]
+        # engines: ^22.19 || >=24 — every supported OS runs the newest line,
+        # plus the lowest supported line on Linux only (4 jobs total). The
+        # launcher chains are platform-specific, so a single-OS matrix could
+        # not catch a regression on macOS/Windows.
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [24]
+        include:
+          - os: ubuntu-latest
+            node: 22
     steps:
       - uses: actions/checkout@v4
 

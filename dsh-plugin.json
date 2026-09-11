@@ -3,7 +3,7 @@
   "manifestVersion": "0.15",
   "id": "com.dsh-tui-ecosystem.dsh-open-path",
   "name": "dsh-open-path",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "facets": {
     "host": {
       "entry": "lib/index.js",

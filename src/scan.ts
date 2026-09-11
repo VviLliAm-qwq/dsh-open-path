@@ -8,6 +8,7 @@
  *
  * @module dsh-open-path/scan
  */
+import { statSync } from 'node:fs';
 import { opendir } from 'node:fs/promises';
 import { basename, join, relative, sep } from 'node:path';
 
@@ -104,7 +105,22 @@ export async function scanWorkspace(
                 }
                 if (!limits.includeHidden && entry.name.startsWith('.')) continue;
                 const absPath = join(dirPath, entry.name);
-                const isDir = entry.isDirectory();
+                // A symlink to a directory reports isDirectory() === false on
+                // every platform, which used to index it as a FILE (opened with
+                // a text editor instead of the file manager). One stat resolves
+                // the real kind; symlinked directories are indexed but NOT
+                // descended into, which keeps the walk cycle-free and inside the
+                // workspace.
+                const isSymlink = entry.isSymbolicLink();
+                let isDir = entry.isDirectory();
+                if (!isDir && isSymlink) {
+                    try {
+                        isDir = statSync(absPath).isDirectory();
+                    }
+                    catch {
+                        isDir = false; // dangling link — keep it as a file
+                    }
+                }
                 if (isDir && IGNORED_DIRS.has(entry.name)) continue;
 
                 const relPath = relative(root, absPath).split(sep).join('/');
@@ -119,7 +135,7 @@ export async function scanWorkspace(
                 if ((count & 255) === 0) {
                     await new Promise((resolve) => setImmediate(resolve));
                 }
-                if (isDir) {
+                if (isDir && !isSymlink) {
                     await walk(absPath, depth + 1);
                 }
             }

@@ -4,27 +4,35 @@
  * Decision tree (all side effects funnel through injected seams so tests can
  * drive the exact same code path the plugin uses):
  *
- *   raw input empty            → open the session working directory
- *   http(s):// URL             → open with the platform default handler
- *   absolute / relative path   → stat; exists → open; missing → fuzzy search
- *   anything else              → fuzzy search of the workspace index
- *      0 hits                  → { kind: 'error', text: 'no match' }
- *      1 hit                   → open it directly
- *      >1 hits, dialogs ready  → managed select dialog → open pick
- *      >1 hits, no dialogs     → error listing the top few candidates
+ *   `~` / `~/…` prefix       → expanded to the user's home directory
+ *   raw input empty          → open the session working directory
+ *   http(s):// URL           → open with the platform default handler
+ *   absolute / relative path → stat; exists → open; missing → fuzzy search
+ *   anything else            → fuzzy search of the workspace index
+ *      0 hits                 → { kind: 'error', text: 'no match' }
+ *      1 hit                  → open it directly
+ *      >1 hits, dialogs ready → managed select dialog → open pick
+ *      >1 hits, no dialogs    → error listing the top few candidates
  *
  * Only http/https URLs are accepted; other schemes (file:, javascript:,
  * ftp:, …) are rejected before reaching the OS handler (urlGuard-style
  * trust boundary, mirroring the TUI's own openExternal classification).
  *
+ * Opening is a hand-off, not a guarantee: the launcher chain from
+ * `resolveLaunchers` is walked in order, and a candidate only counts as a
+ * success once it spawned AND survived the grace window without a non-zero
+ * exit. That is what turns "xdg-open is not installed" from a silent
+ * `已打开` into a real error naming what was tried.
+ *
  * @module dsh-open-path/open
  */
 import { spawn } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
-import { basename, isAbsolute, resolve } from 'node:path';
+import { homedir, release as osRelease } from 'node:os';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 import { rankEntries } from './fuzzy.js';
 import { DEFAULT_LIMITS, scanWorkspace, type ScannedEntry } from './scan.js';
-import { buildOpenSpawn, hasGraphicalSession, type SpawnSpec } from './win32.js';
+import { hasGraphicalSession, resolveLaunchers, type SpawnSpec } from './win32.js';
 
 /** The dsh-commands result shape (structural subset — never imported). */
 export interface CommandResultLike {
@@ -53,7 +61,13 @@ export interface OpenRuntime {
     readonly signal?: AbortSignal;
     /** Platform override for tests (defaults to process.platform). */
     readonly platform?: NodeJS.Platform;
-    /** Spawn seam for tests (defaults to child_process). */
+    /** Environment for the graphical-session probe (tests inject a bare one). */
+    readonly env?: NodeJS.ProcessEnv;
+    /** `os.release()` override for tests (drives WSL detection). */
+    readonly release?: string;
+    /** Home directory for `~` expansion (tests inject a fixture). */
+    readonly home?: string;
+    /** Spawn seam for tests (defaults to the fire-and-forget child). */
     readonly spawn?: (spec: SpawnSpec) => Promise<boolean>;
     /** Scanner seam for tests (defaults to scanWorkspace). */
     readonly scan?: (root: string, limits?: ScanLimitsLike, signal?: AbortSignal) => Promise<ScannedEntry[]>;
@@ -72,41 +86,97 @@ export interface OpenCommandOptions {
     readonly includeHidden: boolean;
 }
 
-/** Fire-and-forget spawn; resolves true once the child was created. */
-function defaultSpawn(spec: SpawnSpec): Promise<boolean> {
-    return new Promise((resolveSpawn) => {
+/**
+ * How long a launcher gets to fail before the hand-off counts as a success.
+ * A launcher that is still alive after this window has either handed the target
+ * to the desktop already or is waiting on the opened application to exit — both
+ * are "opened" from the command's point of view.
+ */
+export const LAUNCH_GRACE_MS = 180;
+
+/**
+ * Spawn one launcher candidate and decide whether the hand-off worked.
+ *
+ * Fire-and-forget (no stdio pipes, unref'd) but not blind: a candidate that
+ * cannot be spawned at all (ENOENT — no xdg-utils installed) or that exits
+ * non-zero (no handler configured for the target) reports failure so the next
+ * candidate gets its turn.
+ */
+function spawnOnce(spec: SpawnSpec, graceMs: number = LAUNCH_GRACE_MS): Promise<boolean> {
+    return new Promise<boolean>((resolveSpawn) => {
+        let settled = false;
+        let timer: NodeJS.Timeout | undefined;
+        const settle = (opened: boolean): void => {
+            if (settled) return;
+            settled = true;
+            if (timer !== undefined) clearTimeout(timer);
+            resolveSpawn(opened);
+        };
+
+        let child;
         try {
-            const child = spawn(spec.file, spec.args, {
+            child = spawn(spec.file, spec.args, {
                 stdio: 'ignore',
                 detached: spec.detached,
                 windowsHide: spec.windowsHide,
                 windowsVerbatimArguments: spec.windowsVerbatimArguments,
             });
-            child.once('error', () => resolveSpawn(false));
-            child.once('spawn', () => resolveSpawn(true));
-            child.unref();
         }
         catch {
             resolveSpawn(false);
+            return;
         }
+
+        timer = setTimeout(() => settle(true), graceMs);
+        // `on` (not `once`): a late error after the grace window must never
+        // surface as an unhandled 'error' event.
+        child.on('error', () => settle(false));
+        child.once('exit', (code) => settle(code === 0));
+        child.unref();
     });
 }
 
+/** Human-facing reason to append when every launcher candidate failed. */
+function launcherHint(platform: NodeJS.Platform): string {
+    if (platform === 'win32') return '请检查系统默认程序关联';
+    if (platform === 'darwin') return '请确认 /usr/bin/open 可用';
+    return '多数精简发行版需要先安装 xdg-utils（或 gio / kde-open）';
+}
+
 /**
- * Open one resolved target; every failure becomes an error result.
- * `isDir: false` also covers http/https URLs — the non-directory channels
- * (Windows `start`, macOS `open`, Linux `xdg-open`) take URLs unchanged.
+ * Open one resolved target, walking the platform launcher chain; every failure
+ * becomes an error result. `isDir: false` also covers http/https URLs — the
+ * non-directory channels (Windows `start`, macOS `open`, Linux `xdg-open`) take
+ * URLs unchanged.
  */
-async function openTarget(runtime: OpenRuntime, absPath: string, isDir: boolean): Promise<CommandResultLike> {
-    if (!hasGraphicalSession(runtime.platform)) {
+async function openTarget(runtime: OpenRuntime, target: string, isDir: boolean): Promise<CommandResultLike> {
+    // A path that is already gone must not be reported as opened: the Windows
+    // COM channel silently does nothing for a missing directory, and a
+    // fire-and-forget launcher would call that a success. URLs skip the probe.
+    if (!isHttpUrl(target) && !existsSync(target)) {
+        return { kind: 'error', text: `目标不存在：${target}` };
+    }
+
+    const platform = runtime.platform ?? process.platform;
+    const env = runtime.env ?? process.env;
+    const release = runtime.release ?? osRelease();
+    if (!hasGraphicalSession(platform, env, release)) {
         return { kind: 'error', text: '当前环境没有图形会话，无法打开文件管理器' };
     }
-    const spec = buildOpenSpawn(absPath, isDir, runtime.platform);
-    const ok = await (runtime.spawn ?? defaultSpawn)(spec);
-    if (!ok) {
-        return { kind: 'error', text: `无法打开 ${absPath}（系统处理请求启动失败）` };
+
+    const spawnSpec = runtime.spawn ?? spawnOnce;
+    const tried: string[] = [];
+    for (const spec of resolveLaunchers(target, isDir, { platform, env, release })) {
+        tried.push(spec.file);
+        if (await spawnSpec(spec)) {
+            return { kind: 'success', text: `已打开 ${target}` };
+        }
     }
-    return { kind: 'success', text: `已打开 ${absPath}` };
+    const attempted = [...new Set(tried)].join('、');
+    return {
+        kind: 'error',
+        text: `无法打开 ${target}（已尝试 ${attempted}，均失败；${launcherHint(platform)}）`,
+    };
 }
 
 function labelFor(entry: ScannedEntry): string {
@@ -174,13 +244,44 @@ export function guessBareUrl(value: string): string | null {
     return `https://${value}`;
 }
 
+/**
+ * Expand a leading `~` (bare, `~/…` or `~\…`) to the user's home directory.
+ * `~user` is deliberately left untouched: no passwd lookup, no shell parsing.
+ * POSIX shells expand this before a command ever sees it, so users type it by
+ * reflex on Linux/macOS — without this, `~/docs` was treated as a relative
+ * path called `~`.
+ */
+export function expandTilde(value: string, home: string): string {
+    if (!value.startsWith('~')) return value;
+    const isBare = value.length === 1;
+    const lead = isBare ? '' : value[1];
+    if (!isBare && lead !== '/' && lead !== '\\') return value; // ~user — untouched
+    const rest = isBare ? '' : value.slice(2);
+    if (rest === '') return home;
+    // `join` both normalises the separator the user typed to this platform's
+    // and keeps a root home directory ("/" or "C:\") single-separated.
+    return join(home, rest);
+}
+
+/** Home directory for `~` expansion, degrading to the workspace root. */
+function homeDir(runtime: OpenRuntime): string {
+    if (runtime.home !== undefined && runtime.home !== '') return runtime.home;
+    try {
+        return homedir();
+    }
+    catch {
+        return runtime.cwd;
+    }
+}
+
 /** Run the full /open decision tree and settle with a command result. */
 export async function runOpenCommand(
     rawInput: string,
     runtime: OpenRuntime,
     options: OpenCommandOptions,
 ): Promise<CommandResultLike> {
-    const query = rawInput.trim();
+    const trimmed = rawInput.trim();
+    const query = trimmed.startsWith('~') ? expandTilde(trimmed, homeDir(runtime)) : trimmed;
 
     // 1) Bare /open → the session working directory.
     if (query === '') {
@@ -228,6 +329,8 @@ export async function runOpenCommand(
     }
 
     // 3) Path-shaped input: absolute, ./, ../, or containing a separator.
+    //    Both separators count on every platform, so a Windows-style path typed
+    //    on Linux (and vice versa) still reaches the fuzzy fallback below.
     const pathShaped = isAbsolute(query) || query.startsWith('.') || /[\\/]/.test(query);
     if (pathShaped) {
         const target = isAbsolute(query) ? query : resolve(runtime.cwd, query);

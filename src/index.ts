@@ -8,6 +8,7 @@
  *  - `/open github.com`       → protocol-less domain: https:// is prepended
  *                               (localhost/IPv4 get http://); a same-named
  *                               workspace file always wins the guess
+ *  - `/open ~/docs`           → `~` expands to the home directory
  *  - `/open <fragment>`       → fuzzy search of the workspace; one match opens
  *                               directly, several matches show a managed
  *                               select dialog (TUI seam 十), none = clear error
@@ -16,6 +17,9 @@
  * schemes (file:, javascript:, ftp:, …) are rejected with a clear error
  * (mirrors the TUI's own openExternal classification). Bare-domain guessing
  * excludes common file extensions, so `readme.md` still means the file.
+ *
+ * Platform support: Windows / macOS / Linux (incl. WSL), each with an ordered
+ * launcher chain — see `./win32.js`.
  *
  * Compatibility contract:
  *  - Manifest: Community v0.15 (`dsh-plugin.json`, commands.dsh/v1alpha1#Command
@@ -26,10 +30,14 @@
  *  - Managed dialog seam is soft-probed (`ctx.get('tuiDialogs', false)`); when
  *    absent the command degrades to a clear error listing — never a crash
  *    (#183 discipline). No host service, no boot impact.
- *  - No session events are appended; no files are ever written by this plugin.
+ *  - No session events are appended; no files are ever written by this plugin,
+ *    except its own bounded diagnostic log (`~/.dsh-tui/dsh-open-path.log`).
  *
  * @module @dsh-tui-ecosystem/dsh-open-path
  */
+import { appendFileSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { Context } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
 import { runOpenCommand, type CommandResultLike, type OpenDialogLike, type OpenCommandOptions } from './open.js';
@@ -121,12 +129,110 @@ function effectiveOptions(config: Config): OpenCommandOptions {
 }
 
 /**
+ * Diagnostic log file (ecosystem convention `~/.dsh-tui/<plugin>.log`).
+ * Resolved lazily: a module-level `homedir()` throw would take the whole entry
+ * down, and diagnostics are never worth a boot failure.
+ */
+function diagLogPath(): string {
+    return join(homedir(), '.dsh-tui', 'dsh-open-path.log');
+}
+
+/** Above this size the log is trimmed to its newest half. */
+const MAX_LOG_BYTES = 128 * 1024;
+
+/**
+ * Test runners must never write into a user's `~/.dsh-tui`. The SOP names
+ * `node --test`; vitest is treated identically, since this suite calls
+ * `apply()` on every run and would otherwise litter the log.
+ */
+function diagnosticsEnabled(): boolean {
+    return typeof process.env?.NODE_TEST_CONTEXT !== 'string' && process.env?.VITEST === undefined;
+}
+
+/**
+ * Append one diagnostic line, keeping the file bounded: past `MAX_LOG_BYTES`
+ * the older half is dropped, so a long-lived session cannot grow the log
+ * without bound.
+ */
+function appendLogLine(path: string, line: string): void {
+    try {
+        if (statSync(path).size > MAX_LOG_BYTES) {
+            const keep = readFileSync(path, 'utf8').slice(-Math.floor(MAX_LOG_BYTES / 2));
+            writeFileSync(path, keep);
+        }
+    }
+    catch {
+        // Missing or unreadable file: the append below recreates it.
+    }
+    appendFileSync(path, line);
+}
+
+try {
+    if (diagnosticsEnabled()) {
+        appendLogLine(
+            diagLogPath(),
+            `${new Date().toISOString()} info module imported pid=${process.pid} node=${process.version} entry=${import.meta.url}\n`,
+        );
+    }
+}
+catch {
+    // Diagnostics must never be the reason a module fails to load.
+}
+
+/** The host logger surface this plugin uses (structurally, never imported). */
+interface HostLoggerLike {
+    info?(message: string): void;
+    warn?(message: string): void;
+}
+
+/**
+ * Lifecycle logger (SOP §2.2): host logger plus this plugin's own bounded file
+ * log, so "host never loaded the file" / "loaded but the seam refused the
+ * registration" / "registered but nothing shows up" are distinguishable from a
+ * single log. Warnings are de-duplicated — the host may re-apply the plugin.
+ */
+function createLogger(ctx: Context, seen: Set<string>): { info(message: string): void; warn(message: string): void } {
+    const host = ctx.logger as unknown as HostLoggerLike | undefined;
+    const write = (level: 'info' | 'warn', message: string): void => {
+        if (level === 'warn') {
+            if (seen.has(message)) return;
+            seen.add(message);
+        }
+        try {
+            host?.[level]?.(`${name}: ${message}`);
+        }
+        catch {
+            // Observability only; never let logging break the plugin.
+        }
+        if (!diagnosticsEnabled()) return;
+        try {
+            appendLogLine(diagLogPath(), `${new Date().toISOString()} ${level} ${message}\n`);
+        }
+        catch {
+            // An unwritable log path is not an error worth surfacing.
+        }
+    };
+    return {
+        info: (message) => write('info', message),
+        warn: (message) => write('warn', message),
+    };
+}
+
+/** `0` = absent, `1` = present (the SOP's seam-probe notation). */
+function seamState(value: unknown): number {
+    return value === undefined || value === null ? 0 : 1;
+}
+
+/**
  * Wire the plugin: register `/open` through the host-mediated command surface
  * (C-041) with a direct-services fallback (C-070). Failures log and degrade —
  * a registration problem must never take the TUI down.
  */
 export function apply(ctx: Context, config: Config = {}): void {
     const options = effectiveOptions(config);
+    const log = createLogger(ctx, new Set<string>());
+    log.info(`apply start pid=${process.pid} entry=${import.meta.url}`);
+    log.info(`config maxCandidates=${options.maxCandidates} includeHidden=${options.includeHidden}`);
 
     const definition: CommandDefinitionLike = {
         name: 'open',
@@ -143,28 +249,44 @@ export function apply(ctx: Context, config: Config = {}): void {
         },
     };
 
+    let host: PluginHostLike | undefined;
+    let commands: CommandsLike | undefined;
+    try {
+        host = ctx.get('tuiPluginHost', false) as PluginHostLike | undefined;
+        // Probed for the log even when the mediated surface wins: a support
+        // session needs to see which surfaces the host actually offers.
+        commands = ctx.get('commands', false) as CommandsLike | undefined;
+        log.info(`seams tuiPluginHost=${seamState(host)} commands=${seamState(commands)} tuiDialogs=${seamState(ctx.get('tuiDialogs', false))}`);
+    }
+    catch (error) {
+        log.warn(`seam probe failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
     let dispose: (() => void) | undefined;
     try {
-        const host = ctx.get('tuiPluginHost', false) as PluginHostLike | undefined;
         if (host !== undefined) {
             // Mediated path: stamps verified component identity + invoke checkpoint.
             dispose = host.registerCommand(ctx, definition);
         }
         else {
-            const commands = ctx.get('commands', false) as CommandsLike | undefined;
-            dispose = commands?.register(definition);
+            const fallback = commands ?? (ctx.get('commands', false) as CommandsLike | undefined);
+            dispose = fallback?.register(definition);
         }
     }
     catch (error) {
         // DUPLICATE_CONTRIBUTION_ID or an absent commands service: log, skip.
-        ctx.logger?.warn?.(`dsh-open-path: command registration failed: ${error instanceof Error ? error.message : String(error)}`);
+        log.warn(`command registration failed: ${error instanceof Error ? error.message : String(error)}`);
         return;
     }
 
     if (dispose === undefined) {
-        ctx.logger?.warn?.('dsh-open-path: no command service available — /open is not registered');
+        log.warn('no command service available — /open is not registered');
         return;
     }
 
-    ctx.effect(() => dispose as () => void, 'dsh-open-path command');
+    log.info(`command registered name=open via=${host !== undefined ? 'tuiPluginHost' : 'commands'} cwd-source=session-header`);
+    ctx.effect(() => () => {
+        log.info('command disposed — /open is no longer registered');
+        (dispose as () => void)();
+    }, 'dsh-open-path command');
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { scanWorkspace } from '../src/scan.js';
@@ -70,5 +70,35 @@ describe('scanWorkspace', () => {
     it('skips a vanished workspace without throwing', async () => {
         const entries = await scanWorkspace(join(tmpdir(), 'dsh-open-path-ghost-' + Date.now()));
         expect(entries).toEqual([]);
+    });
+
+    it('indexes a symlinked directory as a directory, without descending into it', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'dsh-open-path-link-'));
+        cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+        mkdirSync(join(root, 'real'));
+        writeFileSync(join(root, 'real', 'inner.txt'), '');
+        try {
+            symlinkSync(join(root, 'real'), join(root, 'link'), 'dir');
+        }
+        catch {
+            // Windows without developer mode / privileges cannot create links —
+            // nothing to assert on this host.
+            return;
+        }
+
+        const entries = await scanWorkspace(root);
+        const link = entries.find((entry) => entry.relPath === 'link');
+        // Before 0.4.0 this was mis-indexed as a FILE (opened in an editor
+        // instead of the file manager).
+        expect(link?.isDir).toBe(true);
+        // Indexed, but never walked: cycles and escaping the workspace stay out.
+        expect(entries.some((entry) => entry.relPath === 'link/inner.txt')).toBe(false);
+        expect(entries.some((entry) => entry.relPath === 'real/inner.txt')).toBe(true);
+    });
+
+    it('keeps relative paths POSIX-shaped on every platform', async () => {
+        const root = makeTree();
+        const entries = await scanWorkspace(root);
+        expect(entries.every((entry) => !entry.relPath.includes('\\'))).toBe(true);
     });
 });

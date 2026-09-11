@@ -20,8 +20,21 @@ export interface MatchResult {
 
 const WORD_SEPARATOR = /[^a-z0-9\u4e00-\u9fff]/u;
 
+/**
+ * Unicode-normalise a string for matching (NFC).
+ *
+ * Required for macOS: APFS/HFS+ hand back file names in NFD (decomposed), while
+ * a user typing on the same machine produces NFC (composed) — so `café.md`
+ * typed and `cafe\u0301.md` on disk would be different strings for
+ * `startsWith`/`indexOf` and never match. Normalising both sides costs nothing
+ * on Linux/Windows (already NFC) and makes the two forms interchangeable.
+ */
+function normalize(value: string): string {
+    return value.normalize('NFC');
+}
+
 function toLower(value: string): string {
-    return value.toLowerCase();
+    return normalize(value).toLowerCase();
 }
 
 /**
