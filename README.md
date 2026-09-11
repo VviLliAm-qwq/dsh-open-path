@@ -2,9 +2,9 @@
 
 `/open` — 用系统默认程序打开文件与 http(s) 链接、用文件管理器打开文件夹，支持路径直达、URL 直达与工作区模糊搜索。
 
-> [dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI) · 一个为 dsh-TUI 生态打造的插件
+[dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI) · 一个为 dsh-TUI 生态打造的插件
 
-dsh-TUI 生态插件（Community v0.15 manifest），MIT 许可。支持 Windows / macOS / Linux（含 WSL）。
+本插件为 [dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI) 生态插件，生态站点：<https://dshtui.com/>。Community v0.15 manifest，MIT 许可，支持 Windows / macOS / Linux（含 WSL）。
 
 ## 能力
 
