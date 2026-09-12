@@ -83,6 +83,18 @@ describe('rankEntries', () => {
         expect(ranked[0].relPath).toBe('src/index.ts');
     });
 
+    it('keeps every match when the limit is 0 or negative (unlimited)', () => {
+        const many = Array.from({ length: 40 }, (_, index) => ({
+            relPath: `src/file-${index}.ts`,
+            basename: `file-${index}.ts`,
+            isDir: false,
+        }));
+        expect(rankEntries('file', many, 0)).toHaveLength(40);
+        expect(rankEntries('file', many, -1)).toHaveLength(40);
+        // …and the previous behaviour is untouched for a positive limit.
+        expect(rankEntries('file', many, 10)).toHaveLength(10);
+    });
+
     it('keeps entries matched by path alone when basename misses', () => {
         const only = [
             { relPath: 'docs/index-archived.md', basename: 'archived.md', isDir: false },

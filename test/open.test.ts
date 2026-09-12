@@ -23,7 +23,8 @@ function makeWorkspace(): { root: string; cleanup: () => void } {
     };
 }
 
-const DEFAULT_OPTIONS = { maxCandidates: 10, includeHidden: false };
+/** The plugin's shipped defaults: `maxCandidates: 0` = unlimited candidates. */
+const DEFAULT_OPTIONS = { maxCandidates: 0, includeHidden: false };
 
 interface Harness {
     spawns: SpawnSpec[];
@@ -143,6 +144,56 @@ describe('runOpenCommand', () => {
             const call = h.dialog.select.mock.calls[0][0] as { options: Array<{ id: string }> };
             expect(call.options.length).toBeGreaterThanOrEqual(2);
             expect(h.spawns[0].args.join(' ')).toContain('b.test.ts');
+        }
+        finally {
+            ws.cleanup();
+        }
+    });
+
+    /** A synthetic scan result: `count` entries that all match the query. */
+    function syntheticEntries(root: string, count: number): Array<{ relPath: string; absPath: string; isDir: boolean; basename: string }> {
+        return Array.from({ length: count }, (_, index) => {
+            const name = `item-${String(index).padStart(3, '0')}.ts`;
+            return { relPath: `src/${name}`, absPath: join(root, 'src', name), isDir: false, basename: name };
+        });
+    }
+
+    it('offers every match to the dialog — the default is unlimited, not ten', async () => {
+        const ws = makeWorkspace();
+        const h = makeHarness();
+        const entries = syntheticEntries(ws.root, 30);
+        try {
+            await runOpenCommand(
+                'item',
+                { cwd: ws.root, platform: 'win32', dialogs: h.dialog, scan: async () => entries, spawn: async () => true },
+                DEFAULT_OPTIONS,
+            );
+            const call = h.dialog.select.mock.calls[0][0] as { title: string; options: Array<{ id: string }> };
+            expect(call.options).toHaveLength(30); // all of them, not the old cap of 10
+            expect(call.options[0].id).toBe('src/item-000.ts');
+            expect(call.title).toContain('30');
+        }
+        finally {
+            ws.cleanup();
+        }
+    });
+
+    it('caps the request at the host option ceiling and reports the drop in the title', async () => {
+        const ws = makeWorkspace();
+        const h = makeHarness();
+        const entries = syntheticEntries(ws.root, 150);
+        try {
+            await runOpenCommand(
+                'item',
+                { cwd: ws.root, platform: 'win32', dialogs: h.dialog, scan: async () => entries, spawn: async () => true },
+                DEFAULT_OPTIONS,
+            );
+            const call = h.dialog.select.mock.calls[0][0] as { title: string; options: Array<{ id: string }> };
+            // The host keeps the first 100 of a select request — never overshoot.
+            expect(call.options).toHaveLength(100);
+            // …and the title must not pretend the other 50 do not exist.
+            expect(call.title).toContain('150');
+            expect(call.title).toContain('100');
         }
         finally {
             ws.cleanup();

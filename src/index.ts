@@ -11,7 +11,9 @@
  *  - `/open ~/docs`           → `~` expands to the home directory
  *  - `/open <fragment>`       → fuzzy search of the workspace; one match opens
  *                               directly, several matches show a managed
- *                               select dialog (TUI seam 十), none = clear error
+ *                               scrollable select dialog (TUI seam 十, every
+ *                               match up to the host's own option ceiling),
+ *                               none = clear error
  *
  * URL trust boundary: only http/https is handed to the OS handler; other
  * schemes (file:, javascript:, ftp:, …) are rejected with a clear error
@@ -50,7 +52,7 @@ export const name = 'dsh-open-path';
  * to the defaults — it must never fail the TUI boot).
  */
 export type Config = {
-    /** Max candidates shown in the select dialog (1–50, default 10). */
+    /** Max candidates offered in the select dialog; `0` = every match (unlimited). */
     maxCandidates?: number;
     /** Include hidden (dot) files and directories in the fuzzy index. */
     includeHidden?: boolean;
@@ -58,7 +60,11 @@ export type Config = {
 
 export const Config: Schemastery<Config> = z.object({
     // schemastery has no .integer(); slice() truncates decimals anyway.
-    maxCandidates: z.number().min(1).max(50).default(10),
+    // `0` is the default and means "no plugin-side cap": the managed dialog is
+    // windowed and scrolls (↑/↓), so hiding matches buys nothing. Values ≤ 0
+    // are treated as unlimited by the ranker as well, so a stray -1 can never
+    // produce an empty picker.
+    maxCandidates: z.number().min(0).default(0),
     includeHidden: z.boolean().default(false),
 });
 
@@ -123,7 +129,9 @@ export function resolveSessionCwd(agent: CommandInvocationLike['agent']): string
 
 function effectiveOptions(config: Config): OpenCommandOptions {
     return {
-        maxCandidates: config.maxCandidates ?? 10,
+        // Absent or `0` = unlimited (see Config); the ranker treats any value
+        // ≤ 0 the same way, so a stray negative can never empty the picker.
+        maxCandidates: config.maxCandidates ?? 0,
         includeHidden: config.includeHidden ?? false,
     };
 }

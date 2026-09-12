@@ -11,8 +11,16 @@
  *   anything else            → fuzzy search of the workspace index
  *      0 hits                 → { kind: 'error', text: 'no match' }
  *      1 hit                  → open it directly
- *      >1 hits, dialogs ready → managed select dialog → open pick
+ *      >1 hits, dialogs ready → managed select dialog (every match; the host
+ *                               panel is windowed and scrolls with ↑/↓)
+ *                               → open the pick
  *      >1 hits, no dialogs    → error listing the top few candidates
+ *
+ * The candidate list is deliberately never trimmed to a handful: the managed
+ * dialog window covers the host's own option ceiling ({@link DIALOG_MAX_OPTIONS},
+ * 100 in dsh-tui 0.10.x) and the title says so whenever matches had to be
+ * dropped. A broad query therefore degrades into "scroll a bit", never into
+ * "the file you meant was never offered".
  *
  * Only http/https URLs are accepted; other schemes (file:, javascript:,
  * ftp:, …) are rejected before reaching the OS handler (urlGuard-style
@@ -82,9 +90,24 @@ export interface ScanLimitsLike {
 
 /** Effective command options (schema defaults already applied). */
 export interface OpenCommandOptions {
+    /** Plugin-side cap on fuzzy candidates; `0` (the default) keeps every match. */
     readonly maxCandidates: number;
     readonly includeHidden: boolean;
 }
+
+/**
+ * How many options one managed dialog request may carry.
+ *
+ * Mirrors the host's own bound: `TuiDialogRuntime.select` keeps the first 100
+ * options of a request and drops the rest without a word (dsh-tui 0.10.x,
+ * `MAX_OPTIONS`). Keeping the request at that size means the plugin never
+ * builds thousands of option objects the host would throw away, and — more
+ * importantly — that the dialog title can tell the truth about what was
+ * dropped. Deliberately NOT imported from the host: if a future host raises
+ * its bound, this plugin simply offers fewer candidates than it could, which
+ * degrades gracefully instead of touching host internals.
+ */
+export const DIALOG_MAX_OPTIONS = 100;
 
 /**
  * How long a launcher gets to fail before the hand-off counts as a success.
@@ -378,9 +401,16 @@ export async function runOpenCommand(
         };
     }
 
+    // Bound the request at the host's option ceiling, and SAY SO in the title
+    // when matches were dropped: a silent truncation reads as "my file is not
+    // in this workspace", which is the one thing a picker must never imply.
+    const shown = ranked.slice(0, DIALOG_MAX_OPTIONS);
+    const dropped = ranked.length - shown.length;
     const picked = await dialog.select({
-        title: `打开哪个？（${query}）`,
-        options: ranked.map((entry) => ({
+        title: dropped > 0
+            ? `打开哪个？（${query} · 共 ${ranked.length} 个匹配，仅显示前 ${shown.length} 个）`
+            : `打开哪个？（${query} · ${ranked.length} 个匹配）`,
+        options: shown.map((entry) => ({
             id: entry.relPath,
             label: labelFor(entry),
             description: entry.relPath,

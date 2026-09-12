@@ -1,6 +1,6 @@
 {
   "name": "dsh-open-path",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "dsh-TUI /open: open files, folders and http(s) URLs (incl. bare domains like github.com) by path or fuzzy workspace search; a bare /open opens the session working directory in the file manager.",
   "packageManager": "pnpm@11.22.0",
   "type": "module",

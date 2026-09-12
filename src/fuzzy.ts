@@ -125,7 +125,9 @@ export interface RankedEntry {
  * shorter path (less nested = what the user most likely meant).
  *
  * @param entries - scanned workspace entries (any order)
- * @param limit - maximum number of results to return
+ * @param limit - maximum number of results to return; `<= 0` means "no cap"
+ *   and keeps every match (the /open dialog scrolls, so a broad query must
+ *   not silently hide the file the user meant)
  */
 export function rankEntries<T extends { relPath: string; basename: string; isDir: boolean }>(
     query: string,
@@ -149,5 +151,5 @@ export function rankEntries<T extends { relPath: string; basename: string; isDir
         if (left.relPath.length !== right.relPath.length) return left.relPath.length - right.relPath.length;
         return left.relPath < right.relPath ? -1 : left.relPath > right.relPath ? 1 : 0;
     });
-    return scored.slice(0, Math.max(1, limit));
+    return limit > 0 ? scored.slice(0, limit) : scored;
 }
