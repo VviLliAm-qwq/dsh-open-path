@@ -43,6 +43,7 @@ import { join } from 'node:path';
 import type { Context } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
 import { runOpenCommand, type CommandResultLike, type OpenDialogLike, type OpenCommandOptions } from './open.js';
+import { resolveLang, t } from './i18n.js';
 
 /** Cordis row id used for the plugin. */
 export const name = 'dsh-open-path';
@@ -76,6 +77,8 @@ export const Config: Schemastery<Config> = z.object({
 export interface CommandDefinitionLike {
     readonly name: string;
     readonly description: string;
+    /** Localized descriptions the host renders itself (English is the fallback). */
+    readonly descriptions?: { readonly zh?: string; readonly en?: string };
     readonly input?: { readonly hint: string };
     readonly handler: (invocation: CommandInvocationLike) => CommandResultLike | Promise<CommandResultLike>;
 }
@@ -239,13 +242,36 @@ function seamState(value: unknown): number {
 export function apply(ctx: Context, config: Config = {}): void {
     const options = effectiveOptions(config);
     const log = createLogger(ctx, new Set<string>());
+    /**
+     * The host's live language preference (`dsh-tui.lang`), or undefined.
+     *
+     * Read through the public `settings.get(ns)` seam — never by importing host
+     * internals — and defensively, because a host without that namespace (or one
+     * that answers oddly) must still render in the historical default.
+     */
+    const settingsLang = (): unknown => {
+        try {
+            const settings = (ctx as { get?: (name: string, strict?: boolean) => unknown }).get?.('settings', false) as { get?: (ns: string) => unknown } | undefined;
+            const section = settings?.get?.('dsh-tui') as { lang?: unknown } | undefined;
+            return section?.lang;
+        }
+        catch {
+            return undefined;
+        }
+    };
     log.info(`apply start pid=${process.pid} entry=${import.meta.url}`);
     log.info(`config maxCandidates=${options.maxCandidates} includeHidden=${options.includeHidden}`);
 
     const definition: CommandDefinitionLike = {
         name: 'open',
-        description: 'Open a path, http(s) URL or bare domain (github.com), or fuzzy-find a workspace file/folder (blank = working directory)',
-        input: { hint: '<路径 / 文件名 / 链接或域名>（留空 = 打开工作目录）' },
+        // The host localizes `descriptions` itself, so both languages ride along;
+        // `description` stays the English fallback for a host that does not.
+        description: t('en', 'commandDescription'),
+        descriptions: {
+            zh: t('zh', 'commandDescription'),
+            en: t('en', 'commandDescription'),
+        },
+        input: { hint: t(resolveLang({ settingsLang: settingsLang() }), 'commandHint') },
         handler: async (invocation) => {
             const cwd = resolveSessionCwd(invocation.agent);
             const dialogs = ctx.get('tuiDialogs', false) as OpenDialogLike | undefined;

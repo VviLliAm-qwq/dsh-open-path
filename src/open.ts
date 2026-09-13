@@ -39,6 +39,7 @@ import { existsSync, statSync } from 'node:fs';
 import { homedir, release as osRelease } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { rankEntries } from './fuzzy.js';
+import { resolveLang, t, type Lang } from './i18n.js';
 import { DEFAULT_LIMITS, scanWorkspace, type ScannedEntry } from './scan.js';
 import { hasGraphicalSession, resolveLaunchers, type SpawnSpec } from './win32.js';
 
@@ -67,6 +68,8 @@ export interface OpenRuntime {
     readonly dialogs?: OpenDialogLike;
     /** Command cancellation signal. */
     readonly signal?: AbortSignal;
+    /** Resolved UI language; the caller owns the settings seam and passes it in. */
+    readonly lang?: Lang;
     /** Platform override for tests (defaults to process.platform). */
     readonly platform?: NodeJS.Platform;
     /** Environment for the graphical-session probe (tests inject a bare one). */
@@ -160,10 +163,15 @@ function spawnOnce(spec: SpawnSpec, graceMs: number = LAUNCH_GRACE_MS): Promise<
 }
 
 /** Human-facing reason to append when every launcher candidate failed. */
-function launcherHint(platform: NodeJS.Platform): string {
-    if (platform === 'win32') return '请检查系统默认程序关联';
-    if (platform === 'darwin') return '请确认 /usr/bin/open 可用';
-    return '多数精简发行版需要先安装 xdg-utils（或 gio / kde-open）';
+/** The language to render with: the caller's reading, else the host chain. */
+function langOf(runtime: OpenRuntime): Lang {
+    return runtime.lang ?? resolveLang();
+}
+
+function launcherHint(lang: Lang, platform: NodeJS.Platform): string {
+    if (platform === 'win32') return t(lang, 'hintWindows');
+    if (platform === 'darwin') return t(lang, 'hintMac');
+    return t(lang, 'hintLinux');
 }
 
 /**
@@ -173,18 +181,19 @@ function launcherHint(platform: NodeJS.Platform): string {
  * URLs unchanged.
  */
 async function openTarget(runtime: OpenRuntime, target: string, isDir: boolean): Promise<CommandResultLike> {
+    const lang = langOf(runtime);
     // A path that is already gone must not be reported as opened: the Windows
     // COM channel silently does nothing for a missing directory, and a
     // fire-and-forget launcher would call that a success. URLs skip the probe.
     if (!isHttpUrl(target) && !existsSync(target)) {
-        return { kind: 'error', text: `目标不存在：${target}` };
+        return { kind: 'error', text: t(lang, 'targetMissing', { target }) };
     }
 
     const platform = runtime.platform ?? process.platform;
     const env = runtime.env ?? process.env;
     const release = runtime.release ?? osRelease();
     if (!hasGraphicalSession(platform, env, release)) {
-        return { kind: 'error', text: '当前环境没有图形会话，无法打开文件管理器' };
+        return { kind: 'error', text: t(lang, 'noGraphicalSession') };
     }
 
     const spawnSpec = runtime.spawn ?? spawnOnce;
@@ -192,13 +201,13 @@ async function openTarget(runtime: OpenRuntime, target: string, isDir: boolean):
     for (const spec of resolveLaunchers(target, isDir, { platform, env, release })) {
         tried.push(spec.file);
         if (await spawnSpec(spec)) {
-            return { kind: 'success', text: `已打开 ${target}` };
+            return { kind: 'success', text: t(lang, 'opened', { target }) };
         }
     }
-    const attempted = [...new Set(tried)].join('、');
+    const attempted = [...new Set(tried)].join(t(lang, 'listSeparator'));
     return {
         kind: 'error',
-        text: `无法打开 ${target}（已尝试 ${attempted}，均失败；${launcherHint(platform)}）`,
+        text: t(lang, 'openFailed', { target, attempted, hint: launcherHint(lang, platform) }),
     };
 }
 
@@ -303,6 +312,7 @@ export async function runOpenCommand(
     runtime: OpenRuntime,
     options: OpenCommandOptions,
 ): Promise<CommandResultLike> {
+    const lang = langOf(runtime);
     const trimmed = rawInput.trim();
     const query = trimmed.startsWith('~') ? expandTilde(trimmed, homeDir(runtime)) : trimmed;
 
@@ -347,7 +357,7 @@ export async function runOpenCommand(
     if (schemeMatch !== null) {
         return {
             kind: 'error',
-            text: `仅支持 http/https 链接（检测到 ${schemeMatch[1].toLowerCase()}: 协议）`,
+            text: t(lang, 'schemeRejected', { scheme: schemeMatch[1].toLowerCase() }),
         };
     }
 
@@ -379,7 +389,7 @@ export async function runOpenCommand(
     const ranked = rankEntries(fuzzyQuery, entries, options.maxCandidates);
 
     if (ranked.length === 0) {
-        return { kind: 'error', text: `工作区中找不到与 “${query}” 相关的文件或文件夹` };
+        return { kind: 'error', text: t(lang, 'noMatch', { query }) };
     }
 
     if (ranked.length === 1) {
@@ -392,12 +402,12 @@ export async function runOpenCommand(
     if (dialog === undefined) {
         const preview = ranked
             .slice(0, 5)
-            .map((entry) => (entry.isDir ? `[目录] ${entry.relPath}` : entry.relPath))
-            .join('；');
-        const more = ranked.length > 5 ? ` 等 ${ranked.length} 项` : '';
+            .map((entry) => (entry.isDir ? t(lang, 'dirTag', { path: entry.relPath }) : entry.relPath))
+            .join(t(lang, 'listSeparator'));
+        const more = ranked.length > 5 ? t(lang, 'moreItems', { count: ranked.length }) : '';
         return {
             kind: 'error',
-            text: `找到 ${ranked.length} 个匹配，但当前环境没有对话框选择，请键入更精确的路径。候选：${preview}${more}`,
+            text: t(lang, 'noDialogCandidates', { count: ranked.length, preview, more }),
         };
     }
 
@@ -408,8 +418,8 @@ export async function runOpenCommand(
     const dropped = ranked.length - shown.length;
     const picked = await dialog.select({
         title: dropped > 0
-            ? `打开哪个？（${query} · 共 ${ranked.length} 个匹配，仅显示前 ${shown.length} 个）`
-            : `打开哪个？（${query} · ${ranked.length} 个匹配）`,
+            ? t(lang, 'dialogTitleTruncated', { query, count: ranked.length, shown: shown.length })
+            : t(lang, 'dialogTitle', { query, count: ranked.length }),
         options: shown.map((entry) => ({
             id: entry.relPath,
             label: labelFor(entry),
@@ -425,7 +435,7 @@ export async function runOpenCommand(
         return openTarget(runtime, target, isDir);
     }
     catch {
-        return { kind: 'error', text: `无法打开 ${target}（目标已失效）` };
+        return { kind: 'error', text: t(lang, 'targetStale', { target }) };
     }
 }
 
