@@ -1,8 +1,24 @@
 # dsh-open-path
 
+[![ci](https://github.com/VviLliAm-qwq/dsh-open-path/actions/workflows/ci.yml/badge.svg)](https://github.com/VviLliAm-qwq/dsh-open-path/actions/workflows/ci.yml)
+
 **简体中文** · [English](README.md)
 
 一个 `/open` 斜杠命令：用平台默认程序打开文件、文件夹、http(s) 链接或裸域名，并在工作区里模糊查找目标。显示在 [dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI) 里。
+
+## 安装
+
+```sh
+# 从 npm 安装（名称：dsh-open-path）
+dsh plugin --profile dsh-tui add dsh-open-path
+
+# 本仓库本地安装（开发）
+pnpm install --frozen-lockfile && pnpm build
+cd ~/.dsh/profiles/dsh-tui && pnpm add <本仓库路径>
+# 并把 dsh-open-path 加入 package.json 的 dsh.profile.bundles
+```
+
+安装后需在 TUI 内 `/restart`（或重开窗口）生效。
 
 ## 用法
 

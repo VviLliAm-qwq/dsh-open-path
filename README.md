@@ -1,5 +1,7 @@
 # dsh-open-path
 
+[![ci](https://github.com/VviLliAm-qwq/dsh-open-path/actions/workflows/ci.yml/badge.svg)](https://github.com/VviLliAm-qwq/dsh-open-path/actions/workflows/ci.yml)
+
 [简体中文](README.zh.md)
 
 `/open` — 用系统默认程序打开文件与 http(s) 链接、用文件管理器打开文件夹，支持路径直达、URL 直达与工作区模糊搜索。
