@@ -5,6 +5,17 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 
+// Pin the language for this file. The reply text asserted below is the Chinese
+// dictionary, and `runOpenCommand` otherwise resolves the language itself:
+// `DSH_TUI_LANG` → the preference file → the OS locale. A CI runner has no
+// `~/.dsh-tui/lang.json` and reports `C.UTF-8`, which counts as a *present*
+// locale and therefore lands on `en` — so the suite passed on a Chinese desktop
+// and failed every CI job. Pinning the first link of the chain (see
+// `src/i18n.ts`) keeps these assertions about behaviour rather than about who
+// runs them. The probe is deliberately left to `process.env`, exactly as the
+// production path reads it.
+process.env.DSH_TUI_LANG = 'zh';
+
 /** Build a real temp workspace with a small tree, cleaned up after the test. */
 function makeWorkspace(): { root: string; cleanup: () => void } {
     const root = mkdtempSync(join(tmpdir(), 'dsh-open-path-test-'));

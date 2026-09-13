@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { apply, resolveSessionCwd, type CommandDefinitionLike } from '../src/index.js';
 
+// Same pin as in open.test.ts: the registered hint is asserted in Chinese, and
+// `apply()` resolves the language through `resolveLang`, whose last resort is
+// the OS locale — `C.UTF-8` on a CI runner, which lands on `en`.
+process.env.DSH_TUI_LANG = 'zh';
+
 describe('resolveSessionCwd', () => {
     it('reads the live session header cwd — the TUI workspace', () => {
         expect(resolveSessionCwd({ session: { header: { cwd: 'D:\\ws-alpha' } } })).toBe('D:\\ws-alpha');
