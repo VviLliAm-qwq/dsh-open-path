@@ -53,6 +53,10 @@ npx tsc -p tsconfig.json     # 构建
 npx vitest run               # 单元测试（含双语字典键集与语言解析链）
 ```
 
+## 发布
+
+- **仓库**：<https://github.com/VviLliAm-qwq/dsh-open-path>（公开）
+
 ## 许可
 
 MIT — 见 [LICENSE](LICENSE)。
